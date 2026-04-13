@@ -63,7 +63,7 @@ jobs:
         id: upstream
         run: |
           set -euo pipefail
-          npm run metadata -- --dmg "${{ steps.dmg.outputs.path }}" --format github-output >> "$GITHUB_OUTPUT"
+          node ./scripts/metadata.mjs --dmg "${{ steps.dmg.outputs.path }}" --format github-output >> "$GITHUB_OUTPUT"
 
       - name: Check whether release already exists
         id: release_check
@@ -95,7 +95,7 @@ jobs:
         id: tool_paths
         run: |
           set -euo pipefail
-          npm run resolve-installed-tools -- --prefix "${{ steps.tools.outputs.prefix }}" --format github-output >> "$GITHUB_OUTPUT"
+          node ./scripts/resolve-installed-tools.mjs --prefix "${{ steps.tools.outputs.prefix }}" --format github-output >> "$GITHUB_OUTPUT"
 
       - name: Build AppImage
         if: steps.release_check.outputs.skip != 'true'
