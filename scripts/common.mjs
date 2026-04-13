@@ -62,6 +62,41 @@ export async function readJson(targetPath) {
   return JSON.parse(await readFile(targetPath, "utf8"));
 }
 
+async function isExecutable(targetPath) {
+  try {
+    await access(targetPath, fsConstants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function resolveExecutable(candidates, options = {}) {
+  const commandCandidates = Array.isArray(candidates) ? candidates : [candidates];
+  const searchPath = options.path ?? process.env.PATH ?? "";
+  const searchDirectories = searchPath.split(path.delimiter).filter(Boolean);
+
+  for (const candidate of commandCandidates) {
+    if (path.isAbsolute(candidate) || candidate.includes(path.sep)) {
+      if (await isExecutable(candidate)) {
+        return candidate;
+      }
+
+      continue;
+    }
+
+    for (const directory of searchDirectories) {
+      const candidatePath = path.join(directory, candidate);
+
+      if (await isExecutable(candidatePath)) {
+        return candidate;
+      }
+    }
+  }
+
+  throw new Error(`Unable to resolve executable from candidates: ${commandCandidates.join(", ")}`);
+}
+
 export function stripSemverRange(version) {
   const match = version?.match(/\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?/);
   if (!match) {

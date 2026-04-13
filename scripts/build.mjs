@@ -7,6 +7,7 @@ import {
   ensureDir,
   exists,
   logStep,
+  resolveExecutable,
   resolveLinuxPortPath,
   rmrf,
   run,
@@ -192,9 +193,10 @@ async function prepareAppDir(
   const iconSource = (await exists(extractedPayload.iconPngPath))
     ? extractedPayload.iconPngPath
     : extractedPayload.fallbackIconPngPath;
+  const imageMagickCommand = await resolveExecutable(["magick", "convert"]);
   await ensureDir(path.dirname(shareIconFile));
   logStep("Generating Linux desktop icon");
-  await run("magick", [iconSource, "-background", "none", "-resize", "512x512", rootIconFile]);
+  await run(imageMagickCommand, [iconSource, "-background", "none", "-resize", "512x512", rootIconFile]);
   await cp(rootIconFile, shareIconFile);
 
   const desktopContents = [
