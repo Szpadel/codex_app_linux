@@ -54,12 +54,15 @@ async function main() {
   const configDir = await mkdtemp(path.join(os.tmpdir(), "codex-linux-port-config-"));
   const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-linux-port-state-"));
 
+  // GitHub-hosted runners cannot provide a root-owned setuid chrome-sandbox inside the build artifact.
   const command = [
     "timeout",
     "20s",
     "xvfb-run",
     "-a",
     appRunPath,
+    "--no-sandbox",
+    "--disable-setuid-sandbox",
     "--disable-gpu",
   ];
 
