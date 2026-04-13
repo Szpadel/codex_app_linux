@@ -1,0 +1,12 @@
+{
+  "name": "codex-linux-port",
+  "private": true,
+  "type": "module",
+  "description": "Community Linux AppImage port builder for the packaged Codex desktop app.",
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "metadata": "node ./scripts/metadata.mjs",
+    "resolve-installed-tools": "node ./scripts/resolve-installed-tools.mjs",
+    "smoke": "node ./scripts/smoke.mjs"
+  }
+}

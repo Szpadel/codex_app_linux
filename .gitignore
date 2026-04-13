@@ -1,0 +1,7 @@
+Codex.dmg
+cache/
+dist/
+work/
+node_modules/
+npm-cache/
+*.log

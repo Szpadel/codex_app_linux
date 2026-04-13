@@ -1,0 +1,166 @@
+name: Build and Release Codex Linux
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Force a rebuild and republish even if the upstream version already has a GitHub Release.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: codex-linux-release
+  cancel-in-progress: false
+
+env:
+  DEFAULT_CODEX_DMG_URL_SCRIPT: scripts/upstream-package.mjs
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_REBUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            imagemagick \
+            p7zip-full \
+            python3 \
+            xvfb
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Download official Codex DMG
+        id: dmg
+        env:
+          CONFIGURED_CODEX_DMG_URL: ${{ vars.CODEX_DMG_URL }}
+        run: |
+          set -euo pipefail
+          default_dmg_url="$(node --input-type=module -e "import('./${DEFAULT_CODEX_DMG_URL_SCRIPT}').then(({ OFFICIAL_CODEX_DMG_URL }) => process.stdout.write(OFFICIAL_CODEX_DMG_URL))")"
+          dmg_url="${CONFIGURED_CODEX_DMG_URL:-$default_dmg_url}"
+          dmg_path="$RUNNER_TEMP/Codex.dmg"
+          curl -L --fail --output "$dmg_path" "$dmg_url"
+          echo "path=$dmg_path" >> "$GITHUB_OUTPUT"
+          echo "url=$dmg_url" >> "$GITHUB_OUTPUT"
+
+      - name: Read upstream metadata
+        id: upstream
+        run: |
+          set -euo pipefail
+          npm run metadata -- --dmg "${{ steps.dmg.outputs.path }}" --format github-output >> "$GITHUB_OUTPUT"
+
+      - name: Check whether release already exists
+        id: release_check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.upstream.outputs.releaseTag }}"
+          if gh release view "$tag" >/dev/null 2>&1 && [ "$FORCE_REBUILD" != "true" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Release $tag already exists. Skipping scheduled rebuild."
+            exit 0
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - name: Install Linux Codex CLI tools
+        if: steps.release_check.outputs.skip != 'true'
+        id: tools
+        run: |
+          set -euo pipefail
+          tools_prefix="$RUNNER_TEMP/codex-tools"
+          rm -rf "$tools_prefix"
+          npm install --prefix "$tools_prefix" @openai/codex@latest
+          echo "prefix=$tools_prefix" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve bundled tool paths
+        if: steps.release_check.outputs.skip != 'true'
+        id: tool_paths
+        run: |
+          set -euo pipefail
+          npm run resolve-installed-tools -- --prefix "${{ steps.tools.outputs.prefix }}" --format github-output >> "$GITHUB_OUTPUT"
+
+      - name: Build AppImage
+        if: steps.release_check.outputs.skip != 'true'
+        env:
+          CODEX_DMG_PATH: ${{ steps.dmg.outputs.path }}
+          CODEX_LINUX_BINARY: ${{ steps.tool_paths.outputs.codexBinaryPath }}
+          RG_LINUX_BINARY: ${{ steps.tool_paths.outputs.ripgrepBinaryPath }}
+        run: |
+          set -euo pipefail
+          npm run build
+
+      - name: Smoke test packaged startup
+        if: steps.release_check.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          npm run smoke
+
+      - name: Generate release checksum
+        if: steps.release_check.outputs.skip != 'true'
+        id: checksum
+        run: |
+          set -euo pipefail
+          artifact_path="dist/${{ steps.upstream.outputs.artifactName }}"
+          checksum_path="dist/SHA256SUMS.txt"
+          (
+            cd dist
+            sha256sum "${{ steps.upstream.outputs.artifactName }}" > SHA256SUMS.txt
+          )
+          echo "artifact_path=$artifact_path" >> "$GITHUB_OUTPUT"
+          echo "checksum_path=$checksum_path" >> "$GITHUB_OUTPUT"
+
+      - name: Render release notes
+        if: steps.release_check.outputs.skip != 'true'
+        id: notes
+        run: |
+          set -euo pipefail
+          notes_path="$RUNNER_TEMP/release-notes.md"
+          cat > "$notes_path" <<EOF
+          Unofficial community Linux AppImage for Codex.
+
+          Built from the official macOS Codex DMG:
+          - Source URL: ${{ steps.dmg.outputs.url }}
+          - Upstream version: ${{ steps.upstream.outputs.version }}
+          - Electron version: ${{ steps.upstream.outputs.electronVersion }}
+
+          This release is community-maintained and is not an official OpenAI Linux distribution.
+          Use the attached SHA256SUMS.txt file to verify the AppImage.
+          EOF
+          echo "path=$notes_path" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        if: steps.release_check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="${{ steps.upstream.outputs.releaseTag }}"
+          title="Codex Linux ${{ steps.upstream.outputs.version }}"
+          artifact_path="${{ steps.checksum.outputs.artifact_path }}"
+          checksum_path="${{ steps.checksum.outputs.checksum_path }}"
+          notes_path="${{ steps.notes.outputs.path }}"
+
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --title "$title" --notes-file "$notes_path"
+            gh release upload "$tag" "$artifact_path" "$checksum_path" --clobber
+          else
+            gh release create "$tag" "$artifact_path" "$checksum_path" --title "$title" --notes-file "$notes_path"
+          fi
