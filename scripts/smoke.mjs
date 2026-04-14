@@ -2,7 +2,12 @@ import path from "node:path";
 import { mkdtemp, readFile } from "node:fs/promises";
 import os from "node:os";
 
-import { exists, resolveLinuxPortPath, run } from "./common.mjs";
+import { exists, resolveExecutable, resolveLinuxPortPath, rmrf } from "./common.mjs";
+import {
+  FORBIDDEN_STARTUP_MARKERS,
+  REQUIRED_STARTUP_MARKERS,
+  runRuntimeSmoke,
+} from "./smoke-runtime.mjs";
 
 const appDir = resolveLinuxPortPath("work", "AppDir");
 const appRunPath = path.join(appDir, "AppRun");
@@ -21,44 +26,30 @@ async function validateLauncherLayout() {
   }
 }
 
-function assertPackagedStartup(logOutput) {
-  const requiredMarkers = ["packaged=true"];
-  const forbiddenMarkers = ["packaged=false", "localhost:5175", "ERR_CONNECTION_REFUSED"];
-
-  for (const marker of requiredMarkers) {
-    if (!logOutput.includes(marker)) {
-      throw new Error(`Smoke test log is missing required marker "${marker}"\n${logOutput}`);
-    }
-  }
-
-  for (const marker of forbiddenMarkers) {
-    if (logOutput.includes(marker)) {
-      throw new Error(`Smoke test log contains forbidden marker "${marker}"\n${logOutput}`);
-    }
-  }
-}
-
 async function main() {
   await validateLauncherLayout();
 
-  const xvfbAvailable = (await run("bash", ["-lc", "command -v xvfb-run >/dev/null"], { check: false }))
-    .code === 0;
+  let xvfbRunCommand;
 
-  if (!xvfbAvailable) {
+  try {
+    xvfbRunCommand = await resolveExecutable("xvfb-run");
+  } catch {
+    xvfbRunCommand = null;
+  }
+
+  if (!xvfbRunCommand) {
     console.log("Skipping runtime smoke test because xvfb-run is not installed.");
     return;
   }
 
-  const homeDir = await mkdtemp(path.join(os.tmpdir(), "codex-linux-port-home-"));
-  const cacheDir = await mkdtemp(path.join(os.tmpdir(), "codex-linux-port-cache-"));
-  const configDir = await mkdtemp(path.join(os.tmpdir(), "codex-linux-port-config-"));
-  const stateDir = await mkdtemp(path.join(os.tmpdir(), "codex-linux-port-state-"));
+  const sandboxRoot = await mkdtemp(path.join(os.tmpdir(), "codex-linux-port-smoke-"));
+  const homeDir = path.join(sandboxRoot, "home");
+  const cacheDir = path.join(sandboxRoot, "cache");
+  const configDir = path.join(sandboxRoot, "config");
+  const stateDir = path.join(sandboxRoot, "state");
 
   // GitHub-hosted runners cannot provide a root-owned setuid chrome-sandbox inside the build artifact.
-  const command = [
-    "timeout",
-    "20s",
-    "xvfb-run",
+  const commandArgs = [
     "-a",
     appRunPath,
     "--no-sandbox",
@@ -66,27 +57,39 @@ async function main() {
     "--disable-gpu",
   ];
 
-  const result = await run(command[0], command.slice(1), {
-    env: {
-      ELECTRON_ENABLE_LOGGING: "1",
-      HOME: homeDir,
-      XDG_CACHE_HOME: cacheDir,
-      XDG_CONFIG_HOME: configDir,
-      XDG_STATE_HOME: stateDir,
-    },
-    capture: true,
-    check: false,
-  });
+  try {
+    console.log("Launching packaged app smoke test.");
 
-  if (result.code !== 0 && result.code !== 124) {
-    throw new Error(
-      `Smoke test failed with code ${result.code}\nSTDOUT:\n${result.stdout}\nSTDERR:\n${result.stderr}`,
-    );
+    await runRuntimeSmoke({
+      command: xvfbRunCommand,
+      args: commandArgs,
+      env: {
+        ELECTRON_ENABLE_LOGGING: "1",
+        HOME: homeDir,
+        XDG_CACHE_HOME: cacheDir,
+        XDG_CONFIG_HOME: configDir,
+        XDG_STATE_HOME: stateDir,
+      },
+      requiredMarkers: REQUIRED_STARTUP_MARKERS,
+      forbiddenMarkers: FORBIDDEN_STARTUP_MARKERS,
+      timeoutMs: 20_000,
+      shutdownGraceMs: 1_500,
+      forceKillMs: 1_000,
+      onStatus(event) {
+        if (event.type === "required-markers-observed") {
+          console.log("Observed packaged startup markers. Terminating smoke process tree.");
+        }
+
+        if (event.type === "forbidden-marker") {
+          console.log(`Observed forbidden startup marker: ${event.marker}`);
+        }
+      },
+    });
+
+    console.log("Smoke test passed.");
+  } finally {
+    await rmrf(sandboxRoot);
   }
-
-  assertPackagedStartup(`${result.stdout}\n${result.stderr}`);
-
-  console.log("Smoke test passed.");
 }
 
 main().catch((error) => {
