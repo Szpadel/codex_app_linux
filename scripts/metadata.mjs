@@ -2,12 +2,19 @@ import path from "node:path";
 import { mkdtemp } from "node:fs/promises";
 import os from "node:os";
 
+import {
+  deriveArtifactName,
+  getBuildFlavorDisplayName,
+  getDesktopIdForBuildFlavor,
+  resolveBuildFlavor,
+} from "./build-flavor.mjs";
 import { resolveLinuxPortPath, rmrf } from "./common.mjs";
 import { extractMacPayload, readPackagedMetadata, resolveDmgPath } from "./upstream-package.mjs";
 
 function parseArgs(argv) {
   const args = {
     dmgPath: undefined,
+    buildFlavor: undefined,
     format: "json",
   };
 
@@ -22,6 +29,12 @@ function parseArgs(argv) {
 
     if (token === "--format") {
       args.format = argv[index + 1];
+      index += 1;
+      continue;
+    }
+
+    if (token === "--build-flavor") {
+      args.buildFlavor = argv[index + 1];
       index += 1;
       continue;
     }
@@ -42,6 +55,10 @@ function formatMetadata(metadata, format) {
     productName: metadata.productName,
     version: metadata.version,
     electronVersion: metadata.electronVersion,
+    buildFlavor: metadata.buildFlavor,
+    upstreamBuildFlavor: metadata.upstreamBuildFlavor,
+    displayName: metadata.displayName,
+    desktopId: metadata.desktopId,
     executableName: metadata.executableName,
     artifactName: metadata.artifactName,
     releaseTag: metadata.releaseTag,
@@ -57,7 +74,7 @@ function formatMetadata(metadata, format) {
 }
 
 async function main() {
-  const { dmgPath: inputDmgPath, format } = parseArgs(process.argv.slice(2));
+  const { dmgPath: inputDmgPath, buildFlavor: inputBuildFlavor, format } = parseArgs(process.argv.slice(2));
   const dmgPath = resolveDmgPath(inputDmgPath);
   const extractDir = await mkdtemp(path.join(os.tmpdir(), "codex-linux-port-metadata-"));
 
@@ -70,9 +87,24 @@ async function main() {
       quiet: true,
     });
     const metadata = await readPackagedMetadata(appAsarPath);
+    const buildFlavorSelection = resolveBuildFlavor({
+      cliBuildFlavor: inputBuildFlavor,
+      upstreamBuildFlavor: metadata.buildFlavor,
+    });
 
     metadata.executableName = metadata.productName ?? metadata.appName ?? "Codex";
-    metadata.artifactName = `Codex-${metadata.version}-linux-x64.AppImage`;
+    metadata.upstreamBuildFlavor = buildFlavorSelection.upstreamBuildFlavor;
+    metadata.buildFlavor = buildFlavorSelection.buildFlavor;
+    metadata.displayName = getBuildFlavorDisplayName({
+      productName: metadata.productName ?? metadata.appName ?? "Codex",
+      buildFlavor: metadata.buildFlavor,
+    });
+    metadata.desktopId = getDesktopIdForBuildFlavor(metadata.buildFlavor);
+    metadata.artifactName = deriveArtifactName({
+      version: metadata.version,
+      buildFlavor: metadata.buildFlavor,
+      upstreamBuildFlavor: metadata.upstreamBuildFlavor,
+    });
     metadata.releaseTag = `v${metadata.version}`;
 
     process.stdout.write(`${formatMetadata(metadata, format)}\n`);

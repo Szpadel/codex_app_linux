@@ -2,6 +2,12 @@ import path from "node:path";
 import { cp, readFile, rename, writeFile } from "node:fs/promises";
 
 import {
+  deriveArtifactName,
+  getBuildFlavorDisplayName,
+  getDesktopIdForBuildFlavor,
+  resolveBuildFlavor,
+} from "./build-flavor.mjs";
+import {
   copyExecutable,
   downloadFile,
   ensureDir,
@@ -18,6 +24,7 @@ import {
   discoverNativeModules,
   syncRebuiltNativeModules,
 } from "./native-modules.mjs";
+import { applyLinuxPackagedAppPatches, assertLinuxPackagedAppPatches } from "./patch-packaged-app.mjs";
 import { resolveBundledToolPaths } from "./tool-resolver.mjs";
 import {
   extractMacPayload as extractUpstreamMacPayload,
@@ -40,6 +47,26 @@ const runtimeVersionFile = path.join(runtimeDir, ".electron-version");
 
 const DEFAULT_APPIMAGETOOL_URL =
   "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage";
+
+function parseArgs(argv) {
+  const args = {
+    buildFlavor: undefined,
+  };
+
+  for (let index = 0; index < argv.length; index += 1) {
+    const token = argv[index];
+
+    if (token === "--build-flavor") {
+      args.buildFlavor = argv[index + 1];
+      index += 1;
+      continue;
+    }
+
+    throw new Error(`Unknown argument: ${token}`);
+  }
+
+  return args;
+}
 
 function deriveExecutableName(metadata) {
   const candidate = metadata.productName ?? metadata.appName ?? "Codex";
@@ -162,13 +189,16 @@ async function prepareAppDir(
   await cp(extractedPayload.appAsarUnpackedPath, path.join(packagedResourcesDir, "app.asar.unpacked"), {
     recursive: true,
   });
+  await applyLinuxPackagedAppPatches({
+    appAsarPath: path.join(packagedResourcesDir, "app.asar"),
+  });
 
   await syncRebuiltNativeModules({ nativeDepsDir, packagedResourcesDir, nativeModules });
 
   await copyExecutable(hostCodexBinary, path.join(packagedResourcesDir, "codex"));
   await copyExecutable(hostRipgrepBinary, path.join(packagedResourcesDir, "rg"));
 
-  const desktopId = "com.openai.codex";
+  const desktopId = metadata.desktopId;
   const rootDesktopFile = path.join(appDir, `${desktopId}.desktop`);
   const rootIconFile = path.join(appDir, `${desktopId}.png`);
   const shareDesktopFile = path.join(appDir, "usr", "share", "applications", `${desktopId}.desktop`);
@@ -202,7 +232,7 @@ async function prepareAppDir(
   const desktopContents = [
     "[Desktop Entry]",
     "Type=Application",
-    `Name=${metadata.productName ?? "Codex"}`,
+    `Name=${metadata.displayName}`,
     "Comment=OpenAI Codex desktop app",
     "Exec=AppRun",
     `Icon=${desktopId}`,
@@ -221,7 +251,7 @@ async function prepareAppDir(
       '<?xml version="1.0" encoding="UTF-8"?>',
       '<component type="desktop-application">',
       `  <id>${desktopId}.desktop</id>`,
-      `  <name>${metadata.productName ?? "Codex"}</name>`,
+      `  <name>${metadata.displayName}</name>`,
       "  <summary>OpenAI Codex desktop app</summary>",
       "  <metadata_license>CC0-1.0</metadata_license>",
       "  <project_license>LicenseRef-proprietary</project_license>",
@@ -231,7 +261,7 @@ async function prepareAppDir(
       "  <description>",
       "    <p>Unofficial Linux AppImage build of the Codex desktop application assembled from the packaged macOS release.</p>",
       "  </description>",
-      "  <launchable type=\"desktop-id\">com.openai.codex.desktop</launchable>",
+      `  <launchable type="desktop-id">${desktopId}.desktop</launchable>`,
       "  <categories>",
       "    <category>Development</category>",
       "  </categories>",
@@ -248,6 +278,7 @@ async function prepareAppDir(
     'APPDIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"',
     'APP_ROOT="$APPDIR/usr/lib/codex"',
     'RESOURCE_ROOT="$APP_ROOT/resources"',
+    `export BUILD_FLAVOR="\${BUILD_FLAVOR:-${metadata.buildFlavor}}"`,
     'export CODEX_CLI_PATH="${CODEX_CLI_PATH:-$RESOURCE_ROOT/codex}"',
     'export PATH="$RESOURCE_ROOT:${PATH}"',
     `exec "$APP_ROOT/${metadata.executableName}" "$@"`,
@@ -283,6 +314,7 @@ async function validateAppDir(metadata) {
 
   const appRunContents = await readFile(appRunPath, "utf8");
   const expectedExecLine = `exec "$APP_ROOT/${metadata.executableName}" "$@"`;
+  const expectedBuildFlavorLine = `export BUILD_FLAVOR="\${BUILD_FLAVOR:-${metadata.buildFlavor}}"`;
 
   if (!appRunContents.includes(expectedExecLine)) {
     throw new Error(`AppRun does not launch the packaged executable: ${appRunPath}`);
@@ -291,6 +323,12 @@ async function validateAppDir(metadata) {
   if (appRunContents.includes('exec "$APP_ROOT/electron" "$@"')) {
     throw new Error(`AppRun still launches the stock Electron binary: ${appRunPath}`);
   }
+
+  if (!appRunContents.includes(expectedBuildFlavorLine)) {
+    throw new Error(`AppRun does not export the selected build flavor: ${appRunPath}`);
+  }
+
+  await assertLinuxPackagedAppPatches({ appAsarPath: packagedAsarPath });
 }
 
 async function ensureAppImageTool() {
@@ -300,11 +338,11 @@ async function ensureAppImageTool() {
   await run("chmod", ["755", appImageToolPath]);
 }
 
-async function packageAppImage(version) {
+async function packageAppImage(artifactName) {
   await ensureDir(distDir);
-  const artifactPath = path.join(distDir, `Codex-${version}-linux-x64.AppImage`);
-  const stagingArtifactPath = path.join(distDir, `.Codex-${version}-linux-x64.AppImage.tmp`);
-  const previousArtifactPath = path.join(distDir, `.Codex-${version}-linux-x64.AppImage.previous`);
+  const artifactPath = path.join(distDir, artifactName);
+  const stagingArtifactPath = path.join(distDir, `.${artifactName}.tmp`);
+  const previousArtifactPath = path.join(distDir, `.${artifactName}.previous`);
 
   logStep("Packaging AppImage");
   await rmrf(stagingArtifactPath);
@@ -327,6 +365,8 @@ async function packageAppImage(version) {
 }
 
 async function main() {
+  const { buildFlavor: inputBuildFlavor } = parseArgs(process.argv.slice(2));
+
   if (!(await exists(dmgPath))) {
     throw new Error(`Missing source DMG: ${dmgPath}`);
   }
@@ -339,7 +379,23 @@ async function main() {
 
   logStep("Reading packaged app metadata");
   const { packagedManifest, ...metadata } = await readPackagedMetadata(extractedPayload.appAsarPath);
+  const buildFlavorSelection = resolveBuildFlavor({
+    cliBuildFlavor: inputBuildFlavor,
+    upstreamBuildFlavor: metadata.buildFlavor,
+  });
   metadata.executableName = deriveExecutableName(metadata);
+  metadata.upstreamBuildFlavor = buildFlavorSelection.upstreamBuildFlavor;
+  metadata.buildFlavor = buildFlavorSelection.buildFlavor;
+  metadata.displayName = getBuildFlavorDisplayName({
+    productName: metadata.productName ?? metadata.appName ?? "Codex",
+    buildFlavor: metadata.buildFlavor,
+  });
+  metadata.desktopId = getDesktopIdForBuildFlavor(metadata.buildFlavor);
+  metadata.artifactName = deriveArtifactName({
+    version: metadata.version,
+    buildFlavor: metadata.buildFlavor,
+    upstreamBuildFlavor: metadata.upstreamBuildFlavor,
+  });
   const nativeModules = await discoverNativeModules({
     appAsarUnpackedPath: extractedPayload.appAsarUnpackedPath,
     packagedManifest,
@@ -363,7 +419,7 @@ async function main() {
   );
   await validateAppDir(metadata);
   await ensureAppImageTool();
-  const artifactPath = await packageAppImage(metadata.version);
+  const artifactPath = await packageAppImage(metadata.artifactName);
 
   console.log(`\nBuilt AppImage: ${artifactPath}`);
   console.log(`AppDir: ${appDir}`);

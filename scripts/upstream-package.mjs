@@ -1,6 +1,7 @@
 import path from "node:path";
 
 import { readAsarJson } from "./asar.mjs";
+import { parseBuildFlavor } from "./build-flavor.mjs";
 import { ensureDir, exists, resolveLinuxPortPath, rmrf, run, stripSemverRange } from "./common.mjs";
 
 export const OFFICIAL_CODEX_DMG_URL = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
@@ -110,6 +111,9 @@ export async function readPackagedMetadata(appAsarPath) {
     productName: packagedManifest.productName,
     version: packagedManifest.version,
     electronVersion: stripSemverRange(packagedManifest.devDependencies.electron),
+    buildFlavor: parseBuildFlavor(packagedManifest.codexBuildFlavor, {
+      source: "package.json codexBuildFlavor",
+    }) ?? "prod",
     packagedManifest,
   };
 }

@@ -68,11 +68,30 @@ RG_LINUX_BINARY=/absolute/path/to/rg \
 npm run build
 ```
 
+Build a local `dev` flavor without changing the default release behavior:
+
+```bash
+cd /path/to/codex-linux-builder
+CODEX_DMG_PATH=/absolute/path/Codex.dmg \
+CODEX_LINUX_BINARY=/absolute/path/to/codex \
+RG_LINUX_BINARY=/absolute/path/to/rg \
+npm run build -- --build-flavor dev
+```
+
+You can also set `CODEX_BUILD_FLAVOR=dev` instead of passing `--build-flavor dev`, but the CLI flag takes precedence when both are provided.
+
 Read upstream metadata from a DMG:
 
 ```bash
 cd /path/to/codex-linux-builder
 npm run metadata -- --dmg /absolute/path/Codex.dmg
+```
+
+Read metadata for a local flavored build:
+
+```bash
+cd /path/to/codex-linux-builder
+npm run metadata -- --dmg /absolute/path/Codex.dmg --build-flavor dev
 ```
 
 Resolve Linux `codex` and `rg` from an npm install prefix:
