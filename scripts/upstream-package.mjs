@@ -1,8 +1,9 @@
 import path from "node:path";
+import { readFile, writeFile } from "node:fs/promises";
 
 import { readAsarJson } from "./asar.mjs";
 import { parseBuildFlavor } from "./build-flavor.mjs";
-import { ensureDir, exists, resolveLinuxPortPath, rmrf, run, stripSemverRange } from "./common.mjs";
+import { ensureDir, exists, resolveLinuxPortPath, rmrf, run, sha256File, stripSemverRange } from "./common.mjs";
 
 export const OFFICIAL_CODEX_DMG_URL = "https://persistent.oaistatic.com/codex-app-prod/Codex.dmg";
 
@@ -11,6 +12,7 @@ const APP_ASAR_ENTRY = `${DMG_APP_CONTENTS_PREFIX}/Resources/app.asar`;
 const APP_ASAR_UNPACKED_ENTRY = `${DMG_APP_CONTENTS_PREFIX}/Resources/app.asar.unpacked/*`;
 const ICON_PNG_ENTRY = `${DMG_APP_CONTENTS_PREFIX}/Resources/codexTemplate.png`;
 const ICON_PNG_2X_ENTRY = `${DMG_APP_CONTENTS_PREFIX}/Resources/codexTemplate@2x.png`;
+const SOURCE_DMG_SHA256_FILE = ".source-dmg.sha256";
 
 export function resolveDmgPath(inputPath) {
   if (inputPath) {
@@ -26,6 +28,16 @@ export function resolveDmgPath(inputPath) {
 
 function macBundleDirFor(outputDir) {
   return path.join(outputDir, "Codex Installer", "Codex.app", "Contents");
+}
+
+async function readCacheSha256(outputDir) {
+  const cachePath = path.join(outputDir, SOURCE_DMG_SHA256_FILE);
+
+  if (!(await exists(cachePath))) {
+    return null;
+  }
+
+  return (await readFile(cachePath, "utf8")).trim();
 }
 
 async function extractOptionalArchiveEntry(dmgPath, outputDir, entry) {
@@ -56,8 +68,11 @@ export async function extractMacPayload({
   const appAsarUnpackedPath = path.join(appResourcesDir, "app.asar.unpacked");
   const iconPngPath = path.join(appResourcesDir, "codexTemplate@2x.png");
   const fallbackIconPngPath = path.join(appResourcesDir, "codexTemplate.png");
+  const sourceDmgSha256 = await sha256File(dmgPath);
+  const cachedDmgSha256 = await readCacheSha256(outputDir);
 
   const hasRequiredFiles =
+    cachedDmgSha256 === sourceDmgSha256 &&
     (await exists(appAsarPath)) &&
     (!includeUnpacked || (await exists(appAsarUnpackedPath))) &&
     (!includeIcons || (await exists(iconPngPath)) || (await exists(fallbackIconPngPath)));
@@ -92,6 +107,8 @@ export async function extractMacPayload({
       throw new Error(`Missing icon assets in DMG: ${ICON_PNG_2X_ENTRY} or ${ICON_PNG_ENTRY}`);
     }
   }
+
+  await writeFile(path.join(outputDir, SOURCE_DMG_SHA256_FILE), `${sourceDmgSha256}\n`);
 
   return {
     macBundleDir,

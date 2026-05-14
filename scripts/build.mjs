@@ -397,6 +397,7 @@ async function main() {
     upstreamBuildFlavor: metadata.upstreamBuildFlavor,
   });
   const nativeModules = await discoverNativeModules({
+    appAsarPath: extractedPayload.appAsarPath,
     appAsarUnpackedPath: extractedPayload.appAsarUnpackedPath,
     packagedManifest,
   });

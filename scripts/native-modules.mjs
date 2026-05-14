@@ -1,7 +1,13 @@
 import path from "node:path";
 import { cp, readdir } from "node:fs/promises";
 
+import { readAsarJson } from "./asar.mjs";
 import { ensureDir, exists, readJson, rmrf, stripSemverRange } from "./common.mjs";
+
+const LINUX_TARGET = {
+  os: "linux",
+  cpu: "x64",
+};
 
 function moduleNameToPathSegments(moduleName) {
   return moduleName.split("/");
@@ -57,11 +63,59 @@ async function directoryContainsNativeBinary(rootDir) {
   return false;
 }
 
-async function resolveModuleVersion(packagedManifest, moduleName, moduleRoot) {
+function packageListAllows(value, targetValue) {
+  if (value == null) {
+    return true;
+  }
+
+  const entries = (Array.isArray(value) ? value : [value]).filter(
+    (entry) => typeof entry === "string" && entry.length > 0,
+  );
+  const denied = entries
+    .filter((entry) => entry.startsWith("!"))
+    .map((entry) => entry.slice(1));
+
+  if (denied.includes(targetValue)) {
+    return false;
+  }
+
+  const allowed = entries.filter((entry) => !entry.startsWith("!"));
+  return allowed.length === 0 || allowed.includes(targetValue);
+}
+
+export function isPackageCompatibleWithTarget(packageManifest, target = LINUX_TARGET) {
+  return (
+    packageListAllows(packageManifest?.os, target.os) &&
+    packageListAllows(packageManifest?.cpu, target.cpu)
+  );
+}
+
+async function readModuleManifest({ appAsarPath, moduleName, moduleRoot }) {
   const moduleManifestPath = path.join(moduleRoot, "package.json");
-  const moduleManifest = (await exists(moduleManifestPath))
-    ? await readJson(moduleManifestPath)
-    : null;
+
+  if (await exists(moduleManifestPath)) {
+    return await readJson(moduleManifestPath);
+  }
+
+  if (!appAsarPath) {
+    return null;
+  }
+
+  try {
+    return await readAsarJson(
+      appAsarPath,
+      path.join("node_modules", ...moduleNameToPathSegments(moduleName), "package.json"),
+    );
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("Missing ASAR entry:")) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+async function resolveModuleVersion(packagedManifest, moduleName, moduleManifest) {
   const version =
     moduleManifest?.version ??
     packagedManifest.dependencies?.[moduleName] ??
@@ -75,7 +129,7 @@ async function resolveModuleVersion(packagedManifest, moduleName, moduleRoot) {
   return stripSemverRange(version);
 }
 
-export async function discoverNativeModules({ appAsarUnpackedPath, packagedManifest }) {
+export async function discoverNativeModules({ appAsarPath, appAsarUnpackedPath, packagedManifest }) {
   const nodeModulesRoot = path.join(appAsarUnpackedPath, "node_modules");
 
   if (!(await exists(nodeModulesRoot))) {
@@ -92,9 +146,19 @@ export async function discoverNativeModules({ appAsarUnpackedPath, packagedManif
       continue;
     }
 
+    const moduleManifest = await readModuleManifest({
+      appAsarPath,
+      moduleName,
+      moduleRoot,
+    });
+
+    if (moduleManifest && !isPackageCompatibleWithTarget(moduleManifest)) {
+      continue;
+    }
+
     nativeModules.push({
       name: moduleName,
-      version: await resolveModuleVersion(packagedManifest, moduleName, moduleRoot),
+      version: await resolveModuleVersion(packagedManifest, moduleName, moduleManifest),
     });
   }
 

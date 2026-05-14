@@ -6,10 +6,10 @@ const SHARED_TRANSPARENCY_OPTION = "transparent:a,hasShadow";
 const OPAQUE_WINDOW_OPTION = "transparent:0,hasShadow";
 const EXPECTED_AUXILIARY_APPEARANCES = [
   "browserCommentPopup",
+  "globalDictation",
   "avatarOverlay",
   "hotkeyWindowHome",
   "hotkeyWindowThread",
-  "trayMenu",
 ];
 
 export function resolveMainProcessBundlePathFromBootstrapSource(sourceText) {
@@ -28,14 +28,6 @@ export function resolveMainProcessBundlePathFromBootstrapSource(sourceText) {
 }
 
 function assertTransparencyPatchContext(sourceText) {
-  if (!sourceText.includes("function Qh(")) {
-    throw new Error("Main-process bundle no longer contains the shared BrowserWindow helper");
-  }
-
-  if (!sourceText.includes("function $h(")) {
-    throw new Error("Main-process bundle no longer contains the window-appearance switch");
-  }
-
   for (const appearance of EXPECTED_AUXILIARY_APPEARANCES) {
     if (!sourceText.includes(`case\`${appearance}\``)) {
       throw new Error(`Main-process bundle no longer exposes the expected ${appearance} appearance case`);

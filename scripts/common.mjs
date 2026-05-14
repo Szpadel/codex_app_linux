@@ -1,5 +1,7 @@
-import { access, chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
+import { createReadStream } from "node:fs";
+import { access, chmod, copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
@@ -60,6 +62,17 @@ export async function downloadFile(url, destinationPath) {
 
 export async function readJson(targetPath) {
   return JSON.parse(await readFile(targetPath, "utf8"));
+}
+
+export async function sha256File(targetPath) {
+  return await new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(targetPath);
+
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
 }
 
 async function isExecutable(targetPath) {

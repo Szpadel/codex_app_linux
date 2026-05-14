@@ -25,7 +25,7 @@ test("resolveMainProcessBundlePathFromBootstrapSource fails fast when bootstrap 
 
 test("disableTransparentWindowsInMainProcessBundle forces shared auxiliary windows opaque", () => {
   const bundleSource =
-    "function Qh({alwaysOnTop:e,hasShadow:t=!0,platform:n,resizable:r,thickFrame:i,transparent:a=!0}){return{frame:!1,transparent:a,hasShadow:t,resizable:r}}function $h({appearance:e,opaqueWindowsEnabled:t,platform:n}){switch(e){case`browserCommentPopup`:return Qh({platform:n,resizable:!1,thickFrame:!1,transparent:!0});case`avatarOverlay`:return{...Qh({alwaysOnTop:!0,platform:n,resizable:!1,thickFrame:!1}),hasShadow:!1};case`hotkeyWindowHome`:return Qh({platform:n,resizable:!1,thickFrame:!1});case`hotkeyWindowThread`:return Qh({platform:n,resizable:!0});case`trayMenu`:return Qh({alwaysOnTop:!0,platform:n,resizable:!1,thickFrame:!1});}}";
+    "function rG({alwaysOnTop:e,hasShadow:t=!0,platform:n,resizable:r,thickFrame:i,transparent:a=!0}){return{frame:!1,transparent:a,hasShadow:t,resizable:r}}function iG({appearance:e,opaqueWindowsEnabled:t,platform:n}){switch(e){case`browserCommentPopup`:return rG({platform:n,resizable:!1,thickFrame:!1,transparent:!0});case`globalDictation`:return rG({alwaysOnTop:!0,platform:n,resizable:!1,thickFrame:!1,transparent:!0});case`avatarOverlay`:return{...rG({alwaysOnTop:!0,platform:n,resizable:!1,thickFrame:!1}),hasShadow:!1};case`hotkeyWindowHome`:return rG({platform:n,resizable:!1,thickFrame:!1});case`hotkeyWindowThread`:return rG({platform:n,resizable:!0});}}";
 
   const patched = disableTransparentWindowsInMainProcessBundle(bundleSource);
 
@@ -36,7 +36,7 @@ test("disableTransparentWindowsInMainProcessBundle forces shared auxiliary windo
 
 test("disableTransparentWindowsInMainProcessBundle fails fast when the target snippet changes", () => {
   assert.throws(
-    () => disableTransparentWindowsInMainProcessBundle("function Qh(){return{frame:!1}}function $h(){}"),
-    /window-appearance switch|expected browserCommentPopup appearance case|Expected exactly one shared transparent BrowserWindow option/,
+    () => disableTransparentWindowsInMainProcessBundle("function rG(){return{frame:!1}}"),
+    /expected browserCommentPopup appearance case|Expected exactly one shared transparent BrowserWindow option/,
   );
 });
